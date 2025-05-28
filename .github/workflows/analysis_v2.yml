@@ -58,7 +58,7 @@ jobs:
     - name: Clone CBOM Analysis Tool
       uses: actions/checkout@v4
       with:
-        repository: HPE/HPE-CPP-26-AI-Optimized-Quantum-Cryptography
+        repository: Namokar100/tool  # Fixed repository format
         path: ${{ env.CBOM_TOOL_DIR }}
         token: ${{ secrets.PAT_TOKEN }}
 
