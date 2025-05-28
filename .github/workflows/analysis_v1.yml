@@ -81,7 +81,7 @@ jobs:
       with:
         repository: Namokar100/tool  # Fixed repository format
         path: ${{ env.CBOM_TOOL_DIR }}
-        token: ${{ secrets.GITHUB_TOKEN }}
+        token: ${{ secrets.PAT_TOKEN }}
 
     - name: Cache Python Dependencies
       id: cache-pip
