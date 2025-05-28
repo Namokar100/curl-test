@@ -93,20 +93,26 @@ jobs:
         key: pip-${{ hashFiles('**/requirements.txt') }}
         restore-keys: |
           pip-
-
+          
     - name: Install CBOM Tool Dependencies
       run: |
         cd ${{ env.CBOM_TOOL_DIR }}
-        python -m pip install --upgrade pip
+        python -m pip install --upgrade pip setuptools wheel
+        python -m venv venv
+        source venv/bin/activate
+        # Install dependencies first
         pip install -r requirements.txt
-        #pip install .
+        # Install the package in development mode
+        pip install -e .
+        # Verify installation
+        python -c "import calyptra_ql; print('Calyptra-QL package installed successfully')"
 
     - name: Run CBOM Analysis
       id: cbom-analysis
       run: |
         mkdir -p analysis-results
         
-        python -m calyptra_ql.cli "${{ github.workspace }}/repo-to-scan" \
+        python -m calyptra_ql.cli "${{ github.workspace }}" \
           --codeql-path "${{ env.CODEQL_DIR }}/codeql" \
           --codeql-threads 4 \
           --output-cbom analysis-results/cbom.json \
