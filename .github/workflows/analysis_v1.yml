@@ -99,7 +99,7 @@ jobs:
         cd ${{ env.CBOM_TOOL_DIR }}
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install .
+        #pip install .
 
     - name: Run CBOM Analysis
       id: cbom-analysis
