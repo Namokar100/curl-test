@@ -18,18 +18,18 @@ jobs:
 
     steps:
     - name: Checkout Repository to Analyze
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4  # Updated to v4
       with:
         path: repo-to-scan
 
     - name: Set up Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5  # Updated to v5
       with:
         python-version: '3.10'
 
     - name: Cache APT Packages
       id: cache-apt
-      uses: actions/cache@v3
+      uses: actions/cache@v4  # Updated to v4
       with:
         path: |
           /var/cache/apt/archives
@@ -47,7 +47,7 @@ jobs:
 
     - name: Cache CodeQL CLI
       id: codeql-cache
-      uses: actions/cache@v3
+      uses: actions/cache@v4  # Updated to v4
       with:
         path: ${{ env.CODEQL_DIR }}
         key: codeql-${{ env.CODEQL_VERSION }}
@@ -68,7 +68,7 @@ jobs:
 
     - name: Cache CBOM Tool Repository
       id: cache-cbom-repo
-      uses: actions/cache@v3
+      uses: actions/cache@v4  # Updated to v4
       with:
         path: ${{ env.CBOM_TOOL_DIR }}
         key: cbom-repo-${{ github.sha }}
@@ -77,15 +77,15 @@ jobs:
 
     - name: Clone CBOM Analysis Tool
       if: steps.cache-cbom-repo.outputs.cache-hit != 'true'
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4  # Updated to v4
       with:
-        repository: https://github.com/Namokar100/tool.git  # Replace with actual repo
+        repository: Namokar100/tool  # Fixed repository format
         path: ${{ env.CBOM_TOOL_DIR }}
-        token: ${{ secrets.GITHUB_TOKEN }}  # Required if private
+        token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Cache Python Dependencies
       id: cache-pip
-      uses: actions/cache@v3
+      uses: actions/cache@v4  # Updated to v4
       with:
         path: |
           ~/.cache/pip
@@ -99,25 +99,20 @@ jobs:
         cd ${{ env.CBOM_TOOL_DIR }}
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install .  # Install in development mode
+        pip install .
 
     - name: Run CBOM Analysis
       id: cbom-analysis
       run: |
         mkdir -p analysis-results
         
-        # Run the analysis
-        python -m calyptra_ql.cli "${{ github.workspace }}" \
+        python -m calyptra_ql.cli "${{ github.workspace }}/repo-to-scan" \
           --codeql-path "${{ env.CODEQL_DIR }}/codeql" \
-          # --build-command "${CUSTOM_BUILD_COMMAND}" \
-          # --overwrite-db \
-          # --keep-db \
           --codeql-threads 4 \
           --output-cbom analysis-results/cbom.json \
           --output-compliance analysis-results/compliance_report.txt \
           -v
 
-        # Check if analysis produced results
         if [ ! -f analysis-results/cbom.json ] || [ ! -f analysis-results/compliance_report.txt ]; then
           echo "::error::CBOM analysis failed to produce output files"
           exit 1
@@ -135,7 +130,7 @@ jobs:
         fi
 
     - name: Upload Analysis Results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4  # Updated to v4
       if: always()
       with:
         name: cbom-analysis-results
