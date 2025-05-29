@@ -31,8 +31,43 @@ jobs:
       run: |
         sudo apt-get update -y
         sudo apt-get install -y --no-install-recommends \
-          build-essential cmake clang gcc g++ make \
           python3-dev python3-venv git curl
+
+    - name: Install build dependencies
+      run: |
+        # Update repository information
+        
+        # Install essential build tools
+        sudo apt-get install -y build-essential autoconf automake libtool pkg-config cmake clang gcc g++ make
+        
+        # Install curl-specific dependencies including libpsl
+        sudo apt-get install -y libssl-dev zlib1g-dev libnghttp2-dev
+        sudo apt-get install -y libpsl-dev  # Add libpsl development package
+        sudo apt-get install -y libidn2-dev  # For IDN support
+        sudo apt-get install -y libssh2-1-dev  # For SSH support
+        sudo apt-get install -y libkrb5-dev  # For Kerberos support
+        sudo apt-get install -y librtmp-dev  # For RTMP support
+        sudo apt-get install -y libldap2-dev  # For LDAP support
+        sudo apt-get install -y libgnutls28-dev  # Alternative TLS library
+        sudo apt-get install -y libcurl4-openssl-dev  # For development headers
+        
+        # Verify installation of critical packages
+        echo "Verifying installed packages:"
+        dpkg -l | grep -E 'libssl-dev|libpsl-dev|zlib1g-dev|libnghttp2-dev'
+        
+        # Print pkgconfig information for libpsl to verify it's correctly detected
+        echo "PKG-CONFIG information for libpsl:"
+        pkg-config --modversion libpsl || echo "libpsl not found in pkgconfig"
+        pkg-config --libs libpsl || echo "No libs for libpsl found"
+        pkg-config --cflags libpsl || echo "No cflags for libpsl found"
+        
+        # List the target directory contents for debugging
+        echo "Target directory contents:"
+        ls -la ${{ github.workspace }}
+        if [ -d "curl" ]; then
+          echo "Curl directory contents:" 
+          ls -la curl/
+        fi
 
     - name: Cache CodeQL CLI
       id: codeql-cache
