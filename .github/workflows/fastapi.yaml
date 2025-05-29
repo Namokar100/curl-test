@@ -80,9 +80,24 @@ jobs:
 
     - name: Create Source Code Archive
       run: |
-        # Create archive from current directory (excluding .cbom-tool directory)
-        tar --exclude='.cbom-tool' -czf source-code.tar.gz .
-        echo "Archive created at: $(pwd)/source-code.tar.gz"
+        # Create a temporary directory for the source code
+        mkdir -p /tmp/source-to-analyze
+        
+        # Copy current directory contents to temporary location, excluding .cbom-tool and .git
+        rsync -av --exclude='.cbom-tool' --exclude='.git' --exclude='source-code.tar.gz' . /tmp/source-to-analyze/
+        
+        # Create archive from the temporary directory
+        cd /tmp/source-to-analyze
+        tar -czf ${{ github.workspace }}/source-code.tar.gz .
+        
+        # Verify the archive was created
+        if [ -f "${{ github.workspace }}/source-code.tar.gz" ]; then
+          echo "Archive created successfully at: ${{ github.workspace }}/source-code.tar.gz"
+          echo "Archive size: $(ls -lh ${{ github.workspace }}/source-code.tar.gz | awk '{print $5}')"
+        else
+          echo "Failed to create archive"
+          exit 1
+        fi
 
     - name: Submit Analysis Request
       id: submit-analysis
