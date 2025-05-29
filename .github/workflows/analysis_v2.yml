@@ -43,17 +43,26 @@ jobs:
         restore-keys: |
           codeql-
 
-    - name: Download and set up CodeQL CLI
-      if: steps.codeql-cache.outputs.cache-hit != 'true'
+    - name: Setup CodeQL CLI
       run: |
-        mkdir -p ${{ env.CODEQL_DIR }}
-        wget https://github.com/github/codeql-cli-binaries/releases/download/${CODEQL_VERSION}/codeql-linux64.zip
-        unzip codeql-linux64.zip -d ${{ env.CODEQL_DIR }}
-        echo "${{ env.CODEQL_DIR }}/codeql" >> $GITHUB_PATH
-
-    - name: Add CodeQL to PATH
-      if: steps.codeql-cache.outputs.cache-hit == 'true'
-      run: echo "${{ env.CODEQL_DIR }}/codeql" >> $GITHUB_PATH
+        # Download and extract CodeQL CLI
+        mkdir -p $HOME/codeql-cli
+        wget -q https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.21.3/codeql-bundle-linux64.tar.gz -O codeql-bundle.tar.gz
+        tar -xzf codeql-bundle.tar.gz -C $HOME/codeql-cli
+        
+        # Find the codeql executable - may be in a subdirectory
+        CODEQL_PATH=$(find $HOME/codeql-cli -name codeql -type f | head -n 1)
+        CODEQL_DIR=$(dirname "$CODEQL_PATH")
+        
+        echo "$CODEQL_DIR" >> $GITHUB_PATH
+        export PATH="$CODEQL_DIR:$PATH"  # Ensure the path is added to the current session
+        
+        # Debug: Show CodeQL directory structure
+        echo "CodeQL directory contents:"
+        find $HOME/codeql-cli -type f -name "codeql*" | sort
+        
+        # Verify installation
+        "$CODEQL_PATH" --version
 
     - name: Clone CBOM Analysis Tool
       uses: actions/checkout@v4
@@ -76,7 +85,7 @@ jobs:
         echo '#!/bin/bash
         source ${{ env.CBOM_TOOL_DIR }}/venv/bin/activate
         export PYTHONPATH="${PYTHONPATH}:${{ env.CBOM_TOOL_DIR }}"
-        python -m calyptra_ql/cli "$@"' > run-analysis.sh
+        python -m calyptra_ql.cli "$@"' > run-analysis.sh
         chmod +x run-analysis.sh
         # Verify installation
         ./venv/bin/python -c "import calyptra_ql; print('Package found at:', calyptra_ql.__file__)"
