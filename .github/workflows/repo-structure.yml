@@ -1,0 +1,28 @@
+name: Repository Structure Analysis
+
+on:
+  workflow_dispatch:  # Manual trigger
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  show-structure:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout Repository to Analyze
+      uses: actions/checkout@v4
+      with:
+        repository: Namokar100/tool  # Using the same repository as in scan.yml
+        path: repo-to-analyze
+        token: ${{ secrets.PAT_TOKEN }}
+
+    - name: Install Tree
+      run: sudo apt-get install -y tree
+
+    - name: Display Repository Structure
+      run: |
+        echo "Repository Structure:"
+        cd repo-to-analyze
+        tree -a -I '.git'  # Show all files except .git directory 
