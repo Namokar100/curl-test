@@ -50,19 +50,21 @@ jobs:
         wget -q https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.21.3/codeql-bundle-linux64.tar.gz -O codeql-bundle.tar.gz
         tar -xzf codeql-bundle.tar.gz -C $HOME/codeql-cli
         
-        # Find the codeql executable - may be in a subdirectory
+        # Find the codeql executable and set paths
         CODEQL_PATH=$(find $HOME/codeql-cli -name codeql -type f | head -n 1)
         CODEQL_DIR=$(dirname "$CODEQL_PATH")
         
-        echo "$CODEQL_DIR" >> $GITHUB_PATH
-        export PATH="$CODEQL_DIR:$PATH"  # Ensure the path is added to the current session
+        # Set the paths in GITHUB_ENV to persist across steps
+        echo "CODEQL_PATH=${CODEQL_PATH}" >> $GITHUB_ENV
+        echo "CODEQL_DIR=${CODEQL_DIR}" >> $GITHUB_ENV
+        echo "${CODEQL_DIR}" >> $GITHUB_PATH
         
         # Debug: Show CodeQL directory structure
         echo "CodeQL directory contents:"
         find $HOME/codeql-cli -type f -name "codeql*" | sort
         
         # Verify installation
-        "$CODEQL_PATH" --version
+        "${CODEQL_PATH}" --version
 
     - name: Clone CBOM Analysis Tool
       uses: actions/checkout@v4
@@ -98,16 +100,16 @@ jobs:
         
         # Run the analysis using the wrapper script
         ./run-analysis.sh "${{ github.workspace }}" \
-          --codeql-path "${{ env.CODEQL_DIR }}/codeql" \
+          --codeql-path "${{ env.CODEQL_PATH }}" \
           --codeql-threads 4 \
           --output-cbom ../analysis-results/cbom.json \
           --output-compliance ../analysis-results/compliance_report.txt \
           -v
-
+  
         if [ ! -f ../analysis-results/cbom.json ] || [ ! -f ../analysis-results/compliance_report.txt ]; then
           echo "::error::CBOM analysis failed to produce output files"
           exit 1
-        fi
+        fi 
 
     - name: Check for Vulnerabilities
       id: check-vulnerabilities
