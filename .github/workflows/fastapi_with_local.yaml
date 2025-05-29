@@ -40,6 +40,7 @@ jobs:
         sudo apt-get install -y libpsl-dev libidn2-dev libssh2-1-dev
         sudo apt-get install -y libkrb5-dev librtmp-dev libldap2-dev
         sudo apt-get install -y libgnutls28-dev libcurl4-openssl-dev
+        sudo apt-get install -y jq 
 
     - name: Setup CodeQL CLI
       run: |
@@ -157,12 +158,29 @@ jobs:
     - name: Check for Vulnerabilities
       id: check-vulnerabilities
       run: |
-        if grep -q "violations found" analysis-results/compliance_report.txt; then
+        # Check if violations.json has any entries
+        VIOLATIONS_COUNT=$(jq length analysis-results/violations.json)
+        
+        # Check both compliance report and violations.json
+        if [ "$VIOLATIONS_COUNT" -gt 0 ] || grep -q "violations found" analysis-results/compliance_report.txt; then
           echo "has_vulnerabilities=true" >> $GITHUB_ENV
           echo "::warning::Security vulnerabilities were found in the analysis"
+          echo "Found $VIOLATIONS_COUNT violations in the analysis"
+          
+          # Display detailed violations summary
+          echo "Violation Details:"
+          jq -r '.violations[] | "- Rule: \(.rule_id), Severity: \(.severity), File: \(.file_path), Line: \(.line_number)"' analysis-results/violations.json
         else
           echo "has_vulnerabilities=false" >> $GITHUB_ENV
           echo "No security vulnerabilities found"
+        fi
+        
+        # Create a detailed violations summary file
+        if [ "$VIOLATIONS_COUNT" -gt 0 ]; then
+          echo "## Violations Summary" > violations_summary.txt
+          echo "Total violations found: $VIOLATIONS_COUNT" >> violations_summary.txt
+          echo "" >> violations_summary.txt
+          jq -r '.violations[] | "### Violation\nRule: \(.rule_id)\nSeverity: \(.severity)\nDescription: \(.description)\nFile: \(.file_path)\nLine: \(.line_number)\n"' analysis-results/violations.json >> violations_summary.txt
         fi
 
     - name: Upload Analysis Results
@@ -174,6 +192,7 @@ jobs:
           analysis-results/cbom.json
           analysis-results/compliance_report.txt
           analysis-results/violations.json
+          violations_summary.txt
         retention-days: 7
 
     - name: Create Analysis Summary
