@@ -1,0 +1,194 @@
+name: CBOM Vulnerability Analysis with FastAPI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CODEQL_VERSION: v2.21.2
+  CODEQL_DIR: ${{ github.workspace }}/codeql
+  CBOM_TOOL_DIR: ${{ github.workspace }}/.cbom-tool
+  API_PORT: 8000
+
+jobs:
+  cbom-analysis:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install Essential Build Tools
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y --no-install-recommends \
+          python3-dev python3-venv git curl build-essential
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get install -y build-essential autoconf automake libtool pkg-config cmake clang gcc g++ make
+        sudo apt-get install -y libssl-dev zlib1g-dev libnghttp2-dev
+        sudo apt-get install -y libpsl-dev libidn2-dev libssh2-1-dev
+        sudo apt-get install -y libkrb5-dev librtmp-dev libldap2-dev
+        sudo apt-get install -y libgnutls28-dev libcurl4-openssl-dev
+
+    - name: Setup CodeQL CLI
+      run: |
+        mkdir -p $HOME/codeql-cli
+        wget -q https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.21.3/codeql-bundle-linux64.tar.gz -O codeql-bundle.tar.gz
+        tar -xzf codeql-bundle.tar.gz -C $HOME/codeql-cli
+        CODEQL_PATH=$(find $HOME/codeql-cli -name codeql -type f | head -n 1)
+        CODEQL_DIR=$(dirname "$CODEQL_PATH")
+        echo "CODEQL_PATH=${CODEQL_PATH}" >> $GITHUB_ENV
+        echo "CODEQL_DIR=${CODEQL_DIR}" >> $GITHUB_ENV
+        echo "${CODEQL_DIR}" >> $GITHUB_PATH
+        "${CODEQL_PATH}" --version
+
+    - name: Clone CBOM Analysis Tool
+      uses: actions/checkout@v4
+      with:
+        repository: Namokar100/tool
+        path: ${{ env.CBOM_TOOL_DIR }}
+        token: ${{ secrets.PAT_TOKEN }}
+
+    - name: Install CBOM Tool Dependencies
+      run: |
+        cd ${{ env.CBOM_TOOL_DIR }}
+        python -m pip install --upgrade pip setuptools wheel
+        python -m venv venv
+        source venv/bin/activate
+        pip install -r requirements.txt
+        pip install -e .
+
+    - name: Start FastAPI Server
+      run: |
+        cd ${{ env.CBOM_TOOL_DIR }}
+        source venv/bin/activate
+        # Start the FastAPI server in the background
+        python api_main.py &
+        # Wait for the server to start
+        sleep 10
+        # Check if server is running
+        curl http://localhost:${{ env.API_PORT }}/docs || (echo "Server failed to start" && exit 1)
+
+    - name: Submit Analysis Request
+      id: submit-analysis
+      run: |
+        cd ${{ env.CBOM_TOOL_DIR }}
+        source venv/bin/activate
+        
+        # Get the current repository URL
+        REPO_URL="https://github.com/${{ github.repository }}"
+        
+        # Submit the analysis request using curl
+        RESPONSE=$(curl -X POST http://localhost:${{ env.API_PORT }}/analyze/repository \
+          -H "accept: application/json" \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"git_url\": \"${REPO_URL}\",
+            \"build_command\": \"${CUSTOM_BUILD_COMMAND:-}\"
+          }")
+        
+        # Extract analysis ID from response
+        ANALYSIS_ID=$(echo $RESPONSE | python -c "import sys, json; print(json.load(sys.stdin)['analysis_id'])")
+        echo "ANALYSIS_ID=${ANALYSIS_ID}" >> $GITHUB_ENV
+        echo "Analysis ID: ${ANALYSIS_ID}"
+        echo "Analyzing repository: ${REPO_URL}"
+
+    - name: Wait for Analysis Completion
+      run: |
+        cd ${{ env.CBOM_TOOL_DIR }}
+        source venv/bin/activate
+        
+        MAX_ATTEMPTS=30
+        ATTEMPT=0
+        
+        while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+          RESPONSE=$(curl -s http://localhost:${{ env.API_PORT }}/analysis/${{ env.ANALYSIS_ID }}/status)
+          STATUS=$(echo $RESPONSE | python -c "import sys, json; print(json.load(sys.stdin)['status'])")
+          
+          if [ "$STATUS" = "completed" ]; then
+            echo "Analysis completed successfully"
+            break
+          elif [ "$STATUS" = "error" ]; then
+            echo "Analysis failed"
+            exit 1
+          fi
+          
+          ATTEMPT=$((ATTEMPT + 1))
+          echo "Waiting for analysis completion... Attempt $ATTEMPT of $MAX_ATTEMPTS"
+          sleep 10
+        done
+        
+        if [ $ATTEMPT -eq $MAX_ATTEMPTS ]; then
+          echo "Analysis timed out"
+          exit 1
+        fi
+
+    - name: Download Analysis Results
+      run: |
+        cd ${{ env.CBOM_TOOL_DIR }}
+        source venv/bin/activate
+        
+        mkdir -p ../analysis-results
+        
+        # Download CBOM
+        curl -o ../analysis-results/cbom.json \
+          http://localhost:${{ env.API_PORT }}/history/download/${{ env.ANALYSIS_ID }}/cbom.json
+        
+        # Download Compliance Report
+        curl -o ../analysis-results/compliance_report.txt \
+          http://localhost:${{ env.API_PORT }}/history/download/${{ env.ANALYSIS_ID }}/compliance_report.txt
+        
+        # Get Violations Report
+        curl -o ../analysis-results/violations.json \
+          http://localhost:${{ env.API_PORT }}/history/${{ env.ANALYSIS_ID }}/violations_report_json
+
+    - name: Check for Vulnerabilities
+      id: check-vulnerabilities
+      run: |
+        if grep -q "violations found" analysis-results/compliance_report.txt; then
+          echo "has_vulnerabilities=true" >> $GITHUB_ENV
+          echo "::warning::Security vulnerabilities were found in the analysis"
+        else
+          echo "has_vulnerabilities=false" >> $GITHUB_ENV
+          echo "No security vulnerabilities found"
+        fi
+
+    - name: Upload Analysis Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: cbom-analysis-results
+        path: |
+          analysis-results/cbom.json
+          analysis-results/compliance_report.txt
+          analysis-results/violations.json
+        retention-days: 7
+
+    - name: Create Analysis Summary
+      if: always()
+      run: |
+        echo "## CBOM Analysis Results" >> $GITHUB_STEP_SUMMARY
+        echo "Analysis completed at: $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "### Repository Analyzed" >> $GITHUB_STEP_SUMMARY
+        echo "https://github.com/${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+        echo "### Compliance Report" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        cat analysis-results/compliance_report.txt >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        
+        echo "### Violations Report" >> $GITHUB_STEP_SUMMARY
+        echo '```json' >> $GITHUB_STEP_SUMMARY
+        cat analysis-results/violations.json >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+
+    - name: Fail if Vulnerabilities Found
+      if: env.has_vulnerabilities == 'true'
+      run: |
+        echo "Security vulnerabilities were found in the analysis"
+        exit 1
