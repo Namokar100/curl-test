@@ -189,6 +189,8 @@ jobs:
     - name: Create Analysis Summary
       if: always()
       run: |
+        cd ${{ github.workspace }}  # Change to workspace directory first
+        
         echo "## CBOM Analysis Results" >> $GITHUB_STEP_SUMMARY
         echo "Analysis completed at: $(date)" >> $GITHUB_STEP_SUMMARY
         echo "### Repository Analyzed" >> $GITHUB_STEP_SUMMARY
@@ -225,7 +227,17 @@ jobs:
               {
                 echo "**Affected Code:**"
                 echo '```c'  # Specify language for better syntax highlighting
-                if [ -f "$file_path" ]; then
+                
+                # Try all possible file locations
+                if [ -f "repo-to-analyze/$file_path" ]; then
+                  FILE_TO_READ="repo-to-analyze/$file_path"
+                elif [ -f "$file_path" ]; then
+                  FILE_TO_READ="$file_path"
+                else
+                  FILE_TO_READ=""
+                fi
+                
+                if [ ! -z "$FILE_TO_READ" ]; then
                   start=$((line_number - 3))  # 3 lines before
                   end=$((line_number + 3))    # 3 lines after
                   if [ $start -lt 1 ]; then start=1; fi
@@ -238,25 +250,12 @@ jobs:
                         printf "  %d: %s\n", NR, $0
                       }
                     }
-                  ' "$file_path"
+                  ' "$FILE_TO_READ"
                 else
-                  echo "File not found: $file_path"
-                  # Try alternate path
-                  if [ -f "repo-to-analyze/$file_path" ]; then
-                    start=$((line_number - 3))
-                    end=$((line_number + 3))
-                    if [ $start -lt 1 ]; then start=1; fi
-                    
-                    awk -v start="$start" -v end="$end" -v target="$line_number" '
-                      NR >= start && NR <= end {
-                        if (NR == target) {
-                          printf "→ %d: %s\n", NR, $0
-                        } else {
-                          printf "  %d: %s\n", NR, $0
-                        }
-                      }
-                    ' "repo-to-analyze/$file_path"
-                  fi
+                  echo "File not found. Tried:"
+                  echo "- ${{ github.workspace }}/repo-to-analyze/$file_path"
+                  echo "- ${{ github.workspace }}/$file_path"
+                  ls -la "${{ github.workspace }}/repo-to-analyze"  # Debug: List contents
                 fi
                 echo '```'
                 echo ""
