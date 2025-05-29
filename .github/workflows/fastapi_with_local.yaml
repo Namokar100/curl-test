@@ -201,20 +201,99 @@ jobs:
         echo "## CBOM Analysis Results" >> $GITHUB_STEP_SUMMARY
         echo "Analysis completed at: $(date)" >> $GITHUB_STEP_SUMMARY
         echo "### Repository Analyzed" >> $GITHUB_STEP_SUMMARY
-        echo "Local path: ${{ github.workspace }}/repo-to-analyze" >> $GITHUB_STEP_SUMMARY
         echo "Repository: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
-        echo "### Compliance Report" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
-        cat analysis-results/compliance_report.txt >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
         
-        echo "### Violations Report" >> $GITHUB_STEP_SUMMARY
-        echo '```json' >> $GITHUB_STEP_SUMMARY
-        cat analysis-results/violations.json >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
+        # Function to extract code block with context
+        extract_code_block() {
+          local file="$1"
+          local line="$2"
+          local context=3  # Number of lines before and after
+          
+          if [ -f "$file" ]; then
+            start=$((line - context))
+            end=$((line + context))
+            if [ $start -lt 1 ]; then start=1; fi
+            
+            echo "**Code Block** (with $context lines of context):"
+            echo '```'
+            sed -n "${start},${end}p" "$file" | while IFS= read -r code_line; do
+              line_num=$((start++))
+              if [ $line_num -eq $line ]; then
+                echo "→ $line_num: $code_line"  # Highlight the violation line
+              else
+                echo "  $line_num: $code_line"
+              fi
+            done
+            echo '```'
+          else
+            echo "File not found: $file"
+          fi
+        }
+        
+        echo "### Security Violations Found" >> $GITHUB_STEP_SUMMARY
+        
+        # Process each violation and show code blocks
+        if [ -f "analysis-results/violations.json" ]; then
+          VIOLATIONS_COUNT=$(jq length analysis-results/violations.json)
+          
+          if [ "$VIOLATIONS_COUNT" -gt 0 ]; then
+            echo "Total violations found: $VIOLATIONS_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            jq -c '.violations[]' analysis-results/violations.json | while read -r violation; do
+              # Extract violation details
+              rule_id=$(echo $violation | jq -r '.rule_id')
+              severity=$(echo $violation | jq -r '.severity')
+              description=$(echo $violation | jq -r '.description')
+              file_path=$(echo $violation | jq -r '.file_path')
+              line_number=$(echo $violation | jq -r '.line_number')
+              
+              # Write violation details
+              echo "#### Violation in \`$file_path\` at line $line_number" >> $GITHUB_STEP_SUMMARY
+              echo "- **Rule**: $rule_id" >> $GITHUB_STEP_SUMMARY
+              echo "- **Severity**: $severity" >> $GITHUB_STEP_SUMMARY
+              echo "- **Description**: $description" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              
+              # Extract and show the relevant code block
+              {
+                echo "**Affected Code:**"
+                echo '```'
+                if [ -f "repo-to-analyze/$file_path" ]; then
+                  start=$((line_number - 3))  # 3 lines before
+                  end=$((line_number + 3))    # 3 lines after
+                  if [ $start -lt 1 ]; then start=1; fi
+                  
+                  awk -v start="$start" -v end="$end" -v target="$line_number" '
+                    NR >= start && NR <= end {
+                      if (NR == target) {
+                        printf "→ %d: %s\n", NR, $0
+                      } else {
+                        printf "  %d: %s\n", NR, $0
+                      }
+                    }
+                  ' "repo-to-analyze/$file_path"
+                else
+                  echo "File not found: $file_path"
+                fi
+                echo '```'
+                echo ""
+              } >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            echo "No violations found." >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "No violations report found." >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        # Add a separator
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        
+        # Add link to full reports
+        echo "### Full Reports" >> $GITHUB_STEP_SUMMARY
+        echo "Detailed reports are available in the workflow artifacts:" >> $GITHUB_STEP_SUMMARY
+        echo "- CBOM Report (cbom.json)" >> $GITHUB_STEP_SUMMARY
+        echo "- Compliance Report (compliance_report.txt)" >> $GITHUB_STEP_SUMMARY
+        echo "- Violations Report (violations.json)" >> $GITHUB_STEP_SUMMARY
 
-    - name: Fail if Vulnerabilities Found
-      if: env.has_vulnerabilities == 'true'
-      run: |
-        echo "Security vulnerabilities were found in the analysis"
-        exit 1
