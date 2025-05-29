@@ -76,7 +76,7 @@ jobs:
         echo '#!/bin/bash
         source ${{ env.CBOM_TOOL_DIR }}/venv/bin/activate
         export PYTHONPATH="${PYTHONPATH}:${{ env.CBOM_TOOL_DIR }}"
-        python -m calyptra_ql.cli "$@"' > run-analysis.sh
+        python -m calyptra_ql/cli "$@"' > run-analysis.sh
         chmod +x run-analysis.sh
         # Verify installation
         ./venv/bin/python -c "import calyptra_ql; print('Package found at:', calyptra_ql.__file__)"
