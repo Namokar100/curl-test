@@ -103,16 +103,16 @@ jobs:
         if [ -f "${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt" ]; then
           # Extract violations from compliance report and format them
           python -c '
-import json
-import sys
-with open("${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt") as f:
-    data = json.load(f)
-violations = []
-if "violations" in data:
-    violations = data["violations"]
-with open("${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json", "w") as f:
-    json.dump({"violations": violations}, f, indent=2)
-'
+        import json
+        import sys
+        with open("${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt") as f:
+            data = json.load(f)
+        violations = []
+        if "violations" in data:
+            violations = data["violations"]
+        with open("${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json", "w") as f:
+            json.dump({"violations": violations}, f, indent=2)
+        '
           
           # Count violations
           VIOLATIONS_COUNT=$(jq '.violations | length' "${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json")
