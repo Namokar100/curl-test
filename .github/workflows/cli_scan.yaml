@@ -1,0 +1,240 @@
+name: CBOM Vulnerability Analysis with CLI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CODEQL_VERSION: v2.21.2
+  CODEQL_DIR: ${{ github.workspace }}/codeql
+  CBOM_TOOL_DIR: ${{ github.workspace }}/.cbom-tool
+  ANALYSIS_OUTPUT_DIR: ${{ github.workspace }}/analysis-results
+
+jobs:
+  cbom-analysis:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Current Repository
+      uses: actions/checkout@v4
+      with:
+        path: repo-to-analyze
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Install Essential Build Tools
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y --no-install-recommends \
+          python3-dev python3-venv git curl build-essential
+
+    - name: Install build dependencies
+      run: |
+        sudo apt-get install -y build-essential autoconf automake libtool pkg-config cmake clang gcc g++ make
+        sudo apt-get install -y libssl-dev zlib1g-dev libnghttp2-dev
+        sudo apt-get install -y libpsl-dev libidn2-dev libssh2-1-dev
+        sudo apt-get install -y libkrb5-dev librtmp-dev libldap2-dev
+        sudo apt-get install -y libgnutls28-dev libcurl4-openssl-dev
+
+    - name: Setup CodeQL CLI
+      run: |
+        mkdir -p $HOME/codeql-cli
+        wget -q https://github.com/github/codeql-action/releases/download/codeql-bundle-v2.21.3/codeql-bundle-linux64.tar.gz -O codeql-bundle.tar.gz
+        tar -xzf codeql-bundle.tar.gz -C $HOME/codeql-cli
+        CODEQL_PATH=$(find $HOME/codeql-cli -name codeql -type f | head -n 1)
+        CODEQL_DIR=$(dirname "$CODEQL_PATH")
+        echo "CODEQL_PATH=${CODEQL_PATH}" >> $GITHUB_ENV
+        echo "CODEQL_DIR=${CODEQL_DIR}" >> $GITHUB_ENV
+        echo "${CODEQL_DIR}" >> $GITHUB_PATH
+        "${CODEQL_PATH}" --version
+
+    - name: Clone CBOM Analysis Tool
+      uses: actions/checkout@v4
+      with:
+        repository: Namokar100/tool
+        path: ${{ env.CBOM_TOOL_DIR }}
+        token: ${{ secrets.PAT_TOKEN }}
+
+    - name: Install CBOM Tool Dependencies
+      run: |
+        cd ${{ env.CBOM_TOOL_DIR }}
+        python -m pip install --upgrade pip setuptools wheel
+        python -m venv venv
+        source venv/bin/activate
+        pip install -r requirements.txt
+        pip install -e .
+
+    - name: Create Analysis Directory
+      run: |
+        mkdir -p ${{ env.ANALYSIS_OUTPUT_DIR }}
+
+    - name: Run CBOM Analysis
+      run: |
+        cd ${{ env.CBOM_TOOL_DIR }}
+        source venv/bin/activate
+        
+        # Get absolute path of repository to analyze
+        REPO_PATH="${{ github.workspace }}/repo-to-analyze"
+        
+        # Use the FastAPI rules file for consistency
+        RULES_PATH="${{ env.CBOM_TOOL_DIR }}/data/default_rules.yaml"
+        
+        # Run the CLI analysis
+        python calyptra_ql/cli.py \
+          "${REPO_PATH}" \
+          --build-command "autoreconf -fi && ./configure --with-openssl && make -j$(nproc)" \
+          -o "${{ env.ANALYSIS_OUTPUT_DIR }}/cbom.json" \
+          -c "${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt" \
+          --rules "${RULES_PATH}" \
+          --compliance-format json \
+          -vv
+
+    - name: Check for Vulnerabilities
+      id: check-vulnerabilities
+      run: |
+        cd ${{ github.workspace }}
+        
+        # Convert compliance report to violations.json format for consistency with FastAPI output
+        if [ -f "${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt" ]; then
+          # Extract violations from compliance report and format them
+          python -c '
+import json
+import sys
+with open("${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt") as f:
+    data = json.load(f)
+violations = []
+if "violations" in data:
+    violations = data["violations"]
+with open("${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json", "w") as f:
+    json.dump({"violations": violations}, f, indent=2)
+'
+          
+          # Count violations
+          VIOLATIONS_COUNT=$(jq '.violations | length' "${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json")
+          
+          if [ "$VIOLATIONS_COUNT" -gt 0 ]; then
+            echo "has_vulnerabilities=true" >> $GITHUB_ENV
+            echo "::warning::Security vulnerabilities were found in the analysis"
+            echo "Found $VIOLATIONS_COUNT violations in the analysis"
+            
+            # Display detailed violations summary
+            echo "Violation Details:"
+            jq -r '.violations[] | "- Rule: \(.rule_id), Severity: \(.severity), File: \(.file_path), Line: \(.line_number)"' "${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json"
+          else
+            echo "has_vulnerabilities=false" >> $GITHUB_ENV
+            echo "No security vulnerabilities found"
+          fi
+        else
+          echo "::error::Compliance report not found"
+          exit 1
+        fi
+
+    - name: Upload Analysis Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: cbom-analysis-results
+        path: |
+          ${{ env.ANALYSIS_OUTPUT_DIR }}/cbom.json
+          ${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt
+          ${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json
+        retention-days: 7
+
+    - name: Create Analysis Summary
+      if: always()
+      run: |
+        cd ${{ github.workspace }}
+        
+        echo "## CBOM Analysis Results" >> $GITHUB_STEP_SUMMARY
+        echo "Analysis completed at: $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "### Repository Analyzed" >> $GITHUB_STEP_SUMMARY
+        echo "Repository: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+        echo "Branch: ${GITHUB_REF#refs/heads/}" >> $GITHUB_STEP_SUMMARY
+        echo "Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+        
+        echo "### Security Violations Found" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -f "${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json" ]; then
+          VIOLATIONS_COUNT=$(jq '.violations | length' "${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json")
+          
+          if [ "$VIOLATIONS_COUNT" -gt 0 ]; then
+            echo "Total violations found: $VIOLATIONS_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            
+            jq -c '.violations[]' "${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json" | while read -r violation; do
+              rule_id=$(echo $violation | jq -r '.rule_id')
+              severity=$(echo $violation | jq -r '.severity')
+              description=$(echo $violation | jq -r '.description')
+              file_path=$(echo $violation | jq -r '.file_path' | sed 's|^repo-to-analyze/||')
+              line_number=$(echo $violation | jq -r '.line_number')
+              
+              echo "#### Violation in \`$file_path\` at line $line_number" >> $GITHUB_STEP_SUMMARY
+              echo "- **Rule**: $rule_id" >> $GITHUB_STEP_SUMMARY
+              echo "- **Severity**: $severity" >> $GITHUB_STEP_SUMMARY
+              echo "- **Description**: $description" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              
+              {
+                echo "**Affected Code:**"
+                echo '```c'
+                
+                if [ -f "repo-to-analyze/$file_path" ]; then
+                  FILE_TO_READ="repo-to-analyze/$file_path"
+                elif [ -f "$file_path" ]; then
+                  FILE_TO_READ="$file_path"
+                else
+                  FILE_TO_READ=""
+                fi
+                
+                if [ ! -z "$FILE_TO_READ" ]; then
+                  start=$((line_number - 3))
+                  end=$((line_number + 3))
+                  if [ $start -lt 1 ]; then start=1; fi
+                  
+                  awk -v start="$start" -v end="$end" -v target="$line_number" '
+                    NR >= start && NR <= end {
+                      if (NR == target) {
+                        printf "→ %d: %s\n", NR, $0
+                      } else {
+                        printf "  %d: %s\n", NR, $0
+                      }
+                    }
+                  ' "$FILE_TO_READ"
+                else
+                  echo "File not found"
+                fi
+                echo '```'
+                echo ""
+              } >> $GITHUB_STEP_SUMMARY
+            done
+            
+            echo "### Violation Statistics" >> $GITHUB_STEP_SUMMARY
+            echo "- Total violations: $VIOLATIONS_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "- By severity:" >> $GITHUB_STEP_SUMMARY
+            jq -r '.violations[] | .severity' "${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json" | sort | uniq -c | while read -r count severity; do
+              echo "  - $severity: $count" >> $GITHUB_STEP_SUMMARY
+            done
+          else
+            echo "No violations found." >> $GITHUB_STEP_SUMMARY
+          fi
+        else
+          echo "No violations report found." >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "---" >> $GITHUB_STEP_SUMMARY
+        echo "### Full Reports" >> $GITHUB_STEP_SUMMARY
+        echo "Detailed reports are available in the workflow artifacts:" >> $GITHUB_STEP_SUMMARY
+        echo "- CBOM Report (cbom.json)" >> $GITHUB_STEP_SUMMARY
+        echo "- Compliance Report (compliance_report.txt)" >> $GITHUB_STEP_SUMMARY
+        echo "- Violations Report (violations.json)" >> $GITHUB_STEP_SUMMARY
+
+    - name: Fail if Vulnerabilities Found
+      if: env.has_vulnerabilities == 'true'
+      run: |
+        echo "Security vulnerabilities were found in the analysis"
+        exit 1
