@@ -9,6 +9,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run CBOM Analysis
-        uses: Namokar100/cbae-action@v1.0.1
+        uses: Namokar100/cbae-action@v1.0.2
         with:
           token: ${{ secrets.PAT_TOKEN }}
