@@ -23,31 +23,31 @@ jobs:
         fetch-depth: 0  # Needed for change detection
 
     # Early exit if no relevant changes
-    - name: Check for Code Changes
-      id: changes
-      run: |
-        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-          echo "force_run=true" >> $GITHUB_OUTPUT
-          echo "Manual trigger - running full analysis"
-          exit 0
-        fi
+    # - name: Check for Code Changes
+    #   id: changes
+    #   run: |
+    #     if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+    #       echo "force_run=true" >> $GITHUB_OUTPUT
+    #       echo "Manual trigger - running full analysis"
+    #       exit 0
+    #     fi
         
-        # For PRs, check changed files
-        if [ "${{ github.event_name }}" = "pull_request" ]; then
-          CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
-        else
-          # For pushes, check last commit
-          CHANGED_FILES=$(git diff --name-only HEAD^ HEAD)
-        fi
+    #     # For PRs, check changed files
+    #     if [ "${{ github.event_name }}" = "pull_request" ]; then
+    #       CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
+    #     else
+    #       # For pushes, check last commit
+    #       CHANGED_FILES=$(git diff --name-only HEAD^ HEAD)
+    #     fi
         
-        # Check if any source files changed
-        if echo "$CHANGED_FILES" | grep -E '\.(c|cpp|h|hpp|cc|cxx)$'; then
-          echo "force_run=true" >> $GITHUB_OUTPUT
-          echo "Source code changes detected - running analysis"
-        else
-          echo "force_run=false" >> $GITHUB_OUTPUT
-          echo "No source code changes - skipping analysis"
-        fi
+    #     # Check if any source files changed
+    #     if echo "$CHANGED_FILES" | grep -E '\.(c|cpp|h|hpp|cc|cxx)$'; then
+    #       echo "force_run=true" >> $GITHUB_OUTPUT
+    #       echo "Source code changes detected - running analysis"
+    #     else
+    #       echo "force_run=false" >> $GITHUB_OUTPUT
+    #       echo "No source code changes - skipping analysis"
+    #     fi
 
     # Cache build dependencies
     - name: Cache Build Dependencies
