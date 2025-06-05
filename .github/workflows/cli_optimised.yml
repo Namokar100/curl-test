@@ -8,6 +8,7 @@ on:
 
 env:
   CODEQL_VERSION: v2.21.3
+  CBOM_TOOL_VERSION: v1.0.0
   CBOM_TOOL_DIR: ${{ github.workspace }}/.cbom-tool
   ANALYSIS_OUTPUT_DIR: ${{ github.workspace }}/analysis-results
 
@@ -22,10 +23,22 @@ jobs:
       with:
         fetch-depth: 0
 
+    # Cache build dependencies - This saves ~1-2 minutes
+    - name: Cache Build Dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          /var/cache/apt
+          /var/lib/apt
+        key: ${{ runner.os }}-build-deps-${{ hashFiles('**/configure.ac', '**/Makefile.am', '**/CMakeLists.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-build-deps-
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
+        cache: 'pip'  # Cache pip dependencies
 
     - name: Install Essential Build Tools
       run: |
@@ -35,17 +48,31 @@ jobs:
 
     - name: Install Build Dependencies
       run: |
-        sudo apt-get install -y build-essential autoconf automake libtool pkg-config cmake clang gcc g++ make
-        sudo apt-get install -y libssl-dev zlib1g-dev libnghttp2-dev
-        sudo apt-get install -y libpsl-dev libidn2-dev libssh2-1-dev
-        sudo apt-get install -y libkrb5-dev librtmp-dev libldap2-dev
-        sudo apt-get install -y libgnutls28-dev libcurl4-openssl-dev
+        sudo apt-get install -y --no-install-recommends \
+          build-essential autoconf automake libtool pkg-config cmake \
+          clang gcc g++ make \
+          libssl-dev zlib1g-dev libnghttp2-dev \
+          libpsl-dev libidn2-dev libssh2-1-dev \
+          libkrb5-dev librtmp-dev libldap2-dev \
+          libgnutls28-dev libcurl4-openssl-dev
+
+    # Cache CodeQL CLI - This saves ~30-60 seconds
+    - name: Cache CodeQL CLI
+      id: cache-codeql
+      uses: actions/cache@v4
+      with:
+        path: $HOME/codeql-cli
+        key: codeql-${{ env.CODEQL_VERSION }}-${{ runner.os }}
 
     - name: Setup CodeQL CLI
+      if: steps.cache-codeql.outputs.cache-hit != 'true'
       run: |
         mkdir -p $HOME/codeql-cli
         wget -q https://github.com/github/codeql-action/releases/download/codeql-bundle-${{ env.CODEQL_VERSION }}/codeql-bundle-linux64.tar.gz -O codeql-bundle.tar.gz
         tar -xzf codeql-bundle.tar.gz -C $HOME/codeql-cli
+
+    - name: Add CodeQL to PATH
+      run: |
         CODEQL_PATH=$(find $HOME/codeql-cli -name codeql -type f | head -n 1)
         CODEQL_DIR=$(dirname "$CODEQL_PATH")
         echo "CODEQL_PATH=${CODEQL_PATH}" >> $GITHUB_ENV
@@ -53,7 +80,18 @@ jobs:
         echo "${CODEQL_DIR}" >> $GITHUB_PATH
         "${CODEQL_PATH}" --version
 
+    # Cache CBOM Tool - This is the biggest time saver (2-3 minutes)
+    - name: Cache CBOM Tool
+      id: cache-cbom
+      uses: actions/cache@v4
+      with:
+        path: ${{ env.CBOM_TOOL_DIR }}
+        key: cbom-tool-${{ env.CBOM_TOOL_VERSION }}-${{ hashFiles('Namokar100/tool/requirements.txt', 'Namokar100/tool/**/*.py') }}
+        restore-keys: |
+          cbom-tool-${{ env.CBOM_TOOL_VERSION }}-
+
     - name: Clone CBOM Analysis Tool
+      if: steps.cache-cbom.outputs.cache-hit != 'true'
       uses: actions/checkout@v4
       with:
         repository: Namokar100/tool
@@ -61,6 +99,7 @@ jobs:
         token: ${{ secrets.PAT_TOKEN }}
 
     - name: Install CBOM Tool Dependencies
+      if: steps.cache-cbom.outputs.cache-hit != 'true'
       run: |
         cd ${{ env.CBOM_TOOL_DIR }}
         python -m pip install --upgrade pip setuptools wheel
@@ -68,6 +107,32 @@ jobs:
         source venv/bin/activate
         pip install -r requirements.txt
         pip install -e .
+
+    # Cache build artifacts for faster compilation
+    - name: Cache Build Artifacts
+      uses: actions/cache@v4
+      with:
+        path: |
+          configure
+          config.status
+          Makefile
+          **/*.o
+          **/*.a
+          **/.libs
+        key: ${{ runner.os }}-build-${{ hashFiles('**/*.c', '**/*.h', '**/*.cpp', '**/*.hpp', 'configure.ac', 'Makefile.am', 'CMakeLists.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-build-
+
+    # Cache CodeQL database to avoid rebuilding it every time
+    - name: Cache CodeQL Database
+      uses: actions/cache@v4
+      with:
+        path: |
+          codeql-database
+          .codeql
+        key: codeql-db-${{ runner.os }}-${{ hashFiles('**/*.c', '**/*.h', '**/*.cpp', '**/*.hpp') }}-${{ github.sha }}
+        restore-keys: |
+          codeql-db-${{ runner.os }}-${{ hashFiles('**/*.c', '**/*.h', '**/*.cpp', '**/*.hpp') }}-
 
     - name: Create Analysis Directory
       run: mkdir -p ${{ env.ANALYSIS_OUTPUT_DIR }}
@@ -83,10 +148,14 @@ jobs:
         # Use the default rules file
         RULES_PATH="${{ env.CBOM_TOOL_DIR }}/data/default_rules.yaml"
         
-        # Run the CLI analysis
+        # Use parallel compilation for faster builds
+        NPROC=$(nproc)
+        echo "Using $NPROC parallel jobs for compilation"
+        
+        # Run the CLI analysis with optimized build
         python calyptra_ql/cli.py \
           "${REPO_PATH}" \
-          --build-command "autoreconf -fi && ./configure --with-openssl && make -j$(nproc)" \
+          --build-command "autoreconf -fi && ./configure --with-openssl --disable-dependency-tracking && make -j${NPROC}" \
           -o "${{ env.ANALYSIS_OUTPUT_DIR }}/cbom.json" \
           -c "${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt" \
           --rules "${RULES_PATH}" \
