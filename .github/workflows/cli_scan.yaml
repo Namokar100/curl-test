@@ -89,7 +89,6 @@ jobs:
           -o "${{ env.ANALYSIS_OUTPUT_DIR }}/cbom.json" \
           -c "${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt" \
           --rules "${RULES_PATH}" \
-          --compliance-format  \
           -vv
 
     - name: Check for Vulnerabilities
