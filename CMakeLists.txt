@@ -19,6 +19,7 @@
 # KIND, either express or implied.
 #
 # SPDX-License-Identifier: curl
+# comment to test the action file
 #
 ###########################################################################
 # by Tetetest and Sukender (Benoit Neil)
