@@ -19,8 +19,6 @@ jobs:
     steps:
     - name: Checkout Current Repository
       uses: actions/checkout@v4
-      with:
-        path: repo-to-analyze
 
     - name: Set up Python
       uses: actions/setup-python@v5
@@ -79,7 +77,7 @@ jobs:
         source venv/bin/activate
         
         # Get absolute path of repository to analyze
-        REPO_PATH="${{ github.workspace }}/repo-to-analyze"
+        REPO_PATH="${{ github.workspace }}"
         
         # Use the FastAPI rules file for consistency
         RULES_PATH="${{ env.CBOM_TOOL_DIR }}/data/default_rules.yaml"
@@ -91,48 +89,46 @@ jobs:
           -o "${{ env.ANALYSIS_OUTPUT_DIR }}/cbom.json" \
           -c "${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt" \
           --rules "${RULES_PATH}" \
-          --compliance-format json \
+          --compliance-format  \
           -vv
 
     - name: Check for Vulnerabilities
       id: check-vulnerabilities
       run: |
-        cd ${{ github.workspace }}
-        
-        # Convert compliance report to violations.json format for consistency with FastAPI output
-        if [ -f "${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt" ]; then
-          # Extract violations from compliance report and format them
-          python -c '
-        import json
-        import sys
-        with open("${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt") as f:
-            data = json.load(f)
-        violations = []
-        if "violations" in data:
-            violations = data["violations"]
-        with open("${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json", "w") as f:
-            json.dump({"violations": violations}, f, indent=2)
-        '
-          
-          # Count violations
-          VIOLATIONS_COUNT=$(jq '.violations | length' "${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json")
-          
-          if [ "$VIOLATIONS_COUNT" -gt 0 ]; then
-            echo "has_vulnerabilities=true" >> $GITHUB_ENV
-            echo "::warning::Security vulnerabilities were found in the analysis"
-            echo "Found $VIOLATIONS_COUNT violations in the analysis"
-            
-            # Display detailed violations summary
-            echo "Violation Details:"
-            jq -r '.violations[] | "- Rule: \(.rule_id), Severity: \(.severity), File: \(.file_path), Line: \(.line_number)"' "${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json"
-          else
-            echo "has_vulnerabilities=false" >> $GITHUB_ENV
-            echo "No security vulnerabilities found"
-          fi
-        else
+        REPORT_PATH="analysis-results/compliance_report.txt"
+    
+        if [ ! -f "$REPORT_PATH" ]; then
           echo "::error::Compliance report not found"
           exit 1
         fi
+    
+        # Extract each violation block
+        VIOLATION_BLOCKS=$(awk '/^- Rule ID:/ {found=1; print; next} found && NF==0 {found=0; print "---"} found && NF > 0 {print}' "$REPORT_PATH")
+    
+        # Count violations (based on "- Rule ID:" lines)
+        VIOLATIONS_COUNT=$(echo "$VIOLATION_BLOCKS" | grep -c '^- Rule ID:')
+    
+        if [ "$VIOLATIONS_COUNT" -gt 0 ]; then
+          echo "has_vulnerabilities=true" >> $GITHUB_ENV
+          echo "::warning::Security vulnerabilities were found in the analysis"
+          echo "Found $VIOLATIONS_COUNT violations in the analysis"
+    
+          echo "Violation Details:"
+          echo "$VIOLATION_BLOCKS" | awk '
+            /^- Rule ID:/ { rule=$0; next }
+            /^  Location:/ {
+              split($2, pathline, ":");
+              file=pathline[1]; line=pathline[2];
+              sub(/^- Rule ID: */, "", rule);
+              printf "- Rule: %s, File: %s, Line: %s\n", rule, file, line
+            }
+          '
+        else
+          echo "has_vulnerabilities=false" >> $GITHUB_ENV
+          echo "No security vulnerabilities found"
+        fi
+
+
 
     - name: Upload Analysis Results
       uses: actions/upload-artifact@v4
@@ -142,96 +138,71 @@ jobs:
         path: |
           ${{ env.ANALYSIS_OUTPUT_DIR }}/cbom.json
           ${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt
-          ${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json
         retention-days: 7
 
     - name: Create Analysis Summary
       if: always()
       run: |
         cd ${{ github.workspace }}
-        
+        REPORT_PATH="analysis-results/compliance_report.txt"
+    
         echo "## CBOM Analysis Results" >> $GITHUB_STEP_SUMMARY
         echo "Analysis completed at: $(date)" >> $GITHUB_STEP_SUMMARY
         echo "### Repository Analyzed" >> $GITHUB_STEP_SUMMARY
         echo "Repository: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
         echo "Branch: ${GITHUB_REF#refs/heads/}" >> $GITHUB_STEP_SUMMARY
         echo "Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
-        
-        echo "### Security Violations Found" >> $GITHUB_STEP_SUMMARY
-        
-        if [ -f "${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json" ]; then
-          VIOLATIONS_COUNT=$(jq '.violations | length' "${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json")
-          
-          if [ "$VIOLATIONS_COUNT" -gt 0 ]; then
-            echo "Total violations found: $VIOLATIONS_COUNT" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            
-            jq -c '.violations[]' "${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json" | while read -r violation; do
-              rule_id=$(echo $violation | jq -r '.rule_id')
-              severity=$(echo $violation | jq -r '.severity')
-              description=$(echo $violation | jq -r '.description')
-              file_path=$(echo $violation | jq -r '.file_path' | sed 's|^repo-to-analyze/||')
-              line_number=$(echo $violation | jq -r '.line_number')
-              
-              echo "#### Violation in \`$file_path\` at line $line_number" >> $GITHUB_STEP_SUMMARY
-              echo "- **Rule**: $rule_id" >> $GITHUB_STEP_SUMMARY
-              echo "- **Severity**: $severity" >> $GITHUB_STEP_SUMMARY
-              echo "- **Description**: $description" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              
-              {
-                echo "**Affected Code:**"
-                echo '```c'
-                
-                if [ -f "repo-to-analyze/$file_path" ]; then
-                  FILE_TO_READ="repo-to-analyze/$file_path"
-                elif [ -f "$file_path" ]; then
-                  FILE_TO_READ="$file_path"
-                else
-                  FILE_TO_READ=""
-                fi
-                
-                if [ ! -z "$FILE_TO_READ" ]; then
-                  start=$((line_number - 3))
-                  end=$((line_number + 3))
-                  if [ $start -lt 1 ]; then start=1; fi
-                  
-                  awk -v start="$start" -v end="$end" -v target="$line_number" '
-                    NR >= start && NR <= end {
-                      if (NR == target) {
-                        printf "→ %d: %s\n", NR, $0
-                      } else {
-                        printf "  %d: %s\n", NR, $0
-                      }
-                    }
-                  ' "$FILE_TO_READ"
-                else
-                  echo "File not found"
-                fi
-                echo '```'
-                echo ""
-              } >> $GITHUB_STEP_SUMMARY
-            done
-            
-            echo "### Violation Statistics" >> $GITHUB_STEP_SUMMARY
-            echo "- Total violations: $VIOLATIONS_COUNT" >> $GITHUB_STEP_SUMMARY
-            echo "- By severity:" >> $GITHUB_STEP_SUMMARY
-            jq -r '.violations[] | .severity' "${{ env.ANALYSIS_OUTPUT_DIR }}/violations.json" | sort | uniq -c | while read -r count severity; do
-              echo "  - $severity: $count" >> $GITHUB_STEP_SUMMARY
-            done
-          else
-            echo "No violations found." >> $GITHUB_STEP_SUMMARY
-          fi
-        else
-          echo "No violations report found." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+    
+        if [ ! -f "$REPORT_PATH" ]; then
+          echo "### Compliance report not found." >> $GITHUB_STEP_SUMMARY
+          exit 1
         fi
-        
+    
+        echo "### Security Violations Found" >> $GITHUB_STEP_SUMMARY
+    
+        # Extract violation blocks
+        awk '
+          /^- Rule ID:/ {in_rule=1; rule=$0; next}
+          in_rule && /^  Location:/ {
+            loc=$0;
+            match(loc, /([^:]+):([0-9]+)/, arr);
+            file=arr[1];
+            line=arr[2];
+            gsub(/^- Rule ID:[[:space:]]*/, "", rule);
+            gsub(/  Location:[[:space:]]*/, "", loc);
+            printf("#### Violation in `%s` at line %s\n", file, line) >> "summary.md";
+            printf("- **Rule**: %s\n", rule) >> "summary.md";
+            printf("- **File**: %s\n", file) >> "summary.md";
+            printf("- **Line**: %s\n", line) >> "summary.md";
+            
+            if (system("[ -f \"" file "\" ]") == 0) {
+              start = (line - 3 > 0) ? line - 3 : 1;
+              end = line + 3;
+              printf("**Affected Code:**\n\`\`\`c\n") >> "summary.md";
+              cmd = sprintf("awk \'NR >= %d && NR <= %d { if (NR == %d) { printf(\"→ %%d: %%s\\n\", NR, $0) } else { printf(\"  %%d: %%s\\n\", NR, $0) }}\' %s", start, end, line, file);
+              system(cmd " >> summary.md");
+              printf("\`\`\`\n\n") >> "summary.md";
+            } else {
+              printf("File not found in workspace.\n\n") >> "summary.md";
+            }
+            in_rule=0;
+          }
+        ' "$REPORT_PATH"
+    
+        if [ -f summary.md ]; then
+          cat summary.md >> $GITHUB_STEP_SUMMARY
+          rm summary.md
+        else
+          echo "No violations found." >> $GITHUB_STEP_SUMMARY
+        fi
+    
         echo "---" >> $GITHUB_STEP_SUMMARY
         echo "### Full Reports" >> $GITHUB_STEP_SUMMARY
         echo "Detailed reports are available in the workflow artifacts:" >> $GITHUB_STEP_SUMMARY
         echo "- CBOM Report (cbom.json)" >> $GITHUB_STEP_SUMMARY
         echo "- Compliance Report (compliance_report.txt)" >> $GITHUB_STEP_SUMMARY
-        echo "- Violations Report (violations.json)" >> $GITHUB_STEP_SUMMARY
+
 
     - name: Fail if Vulnerabilities Found
       if: env.has_vulnerabilities == 'true'
