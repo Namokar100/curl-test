@@ -22,36 +22,8 @@ jobs:
       with:
         fetch-depth: 0  # Needed for change detection
 
-    # Early exit if no relevant changes
-    # - name: Check for Code Changes
-    #   id: changes
-    #   run: |
-    #     if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-    #       echo "force_run=true" >> $GITHUB_OUTPUT
-    #       echo "Manual trigger - running full analysis"
-    #       exit 0
-    #     fi
-        
-    #     # For PRs, check changed files
-    #     if [ "${{ github.event_name }}" = "pull_request" ]; then
-    #       CHANGED_FILES=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }})
-    #     else
-    #       # For pushes, check last commit
-    #       CHANGED_FILES=$(git diff --name-only HEAD^ HEAD)
-    #     fi
-        
-    #     # Check if any source files changed
-    #     if echo "$CHANGED_FILES" | grep -E '\.(c|cpp|h|hpp|cc|cxx)$'; then
-    #       echo "force_run=true" >> $GITHUB_OUTPUT
-    #       echo "Source code changes detected - running analysis"
-    #     else
-    #       echo "force_run=false" >> $GITHUB_OUTPUT
-    #       echo "No source code changes - skipping analysis"
-    #     fi
-
     # Cache build dependencies
     - name: Cache Build Dependencies
-      if: steps.changes.outputs.force_run == 'true'
       uses: actions/cache@v4
       with:
         path: |
@@ -63,7 +35,6 @@ jobs:
 
     # Optimized dependency installation
     - name: Install Build Dependencies
-      if: steps.changes.outputs.force_run == 'true'
       run: |
         # Use apt-fast for faster downloads (if available) or parallel downloads
         sudo apt-get update -y
@@ -78,7 +49,6 @@ jobs:
 
     # Cache CodeQL CLI
     - name: Cache CodeQL CLI
-      if: steps.changes.outputs.force_run == 'true'
       id: cache-codeql
       uses: actions/cache@v4
       with:
@@ -86,21 +56,19 @@ jobs:
         key: codeql-${{ env.CODEQL_VERSION }}-${{ runner.os }}
 
     - name: Setup CodeQL CLI
-      if: steps.changes.outputs.force_run == 'true' && steps.cache-codeql.outputs.cache-hit != 'true'
+      if: steps.cache-codeql.outputs.cache-hit != 'true'
       run: |
         mkdir -p ${{ runner.temp }}/codeql-cli
         wget -q https://github.com/github/codeql-action/releases/download/codeql-bundle-${{ env.CODEQL_VERSION }}/codeql-bundle-linux64.tar.gz -O codeql-bundle.tar.gz
         tar -xzf codeql-bundle.tar.gz -C ${{ runner.temp }}/codeql-cli --strip-components=1
 
     - name: Add CodeQL to PATH
-      if: steps.changes.outputs.force_run == 'true'
       run: |
         echo "${{ runner.temp }}/codeql-cli/codeql" >> $GITHUB_PATH
         echo "CODEQL_PATH=${{ runner.temp }}/codeql-cli/codeql" >> $GITHUB_ENV
 
     # Cache Python dependencies
     - name: Setup Python
-      if: steps.changes.outputs.force_run == 'true'
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
@@ -108,7 +76,6 @@ jobs:
 
     # Cache CBOM tool
     - name: Cache CBOM Tool
-      if: steps.changes.outputs.force_run == 'true'
       id: cache-cbom
       uses: actions/cache@v4
       with:
@@ -116,7 +83,7 @@ jobs:
         key: cbom-tool-${{ env.CBOM_TOOL_VERSION }}-${{ hashFiles('**/requirements.txt') }}
 
     - name: Clone CBOM Analysis Tool
-      if: steps.changes.outputs.force_run == 'true' && steps.cache-cbom.outputs.cache-hit != 'true'
+      if: steps.cache-cbom.outputs.cache-hit != 'true'
       uses: actions/checkout@v4
       with:
         repository: Namokar100/tool
@@ -124,7 +91,7 @@ jobs:
         token: ${{ secrets.PAT_TOKEN }}
 
     - name: Install CBOM Tool Dependencies
-      if: steps.changes.outputs.force_run == 'true' && steps.cache-cbom.outputs.cache-hit != 'true'
+      if: steps.cache-cbom.outputs.cache-hit != 'true'
       run: |
         cd ${{ runner.temp }}/cbom-tool
         python -m pip install --upgrade pip setuptools wheel
@@ -135,7 +102,6 @@ jobs:
 
     # Cache build artifacts
     - name: Cache Build Artifacts
-      if: steps.changes.outputs.force_run == 'true'
       uses: actions/cache@v4
       with:
         path: |
@@ -149,12 +115,10 @@ jobs:
           ${{ runner.os }}-build-
 
     - name: Create Analysis Directory
-      if: steps.changes.outputs.force_run == 'true'
       run: mkdir -p ${{ env.ANALYSIS_OUTPUT_DIR }}
 
     # Optimized build with parallel compilation
     - name: Run CBOM Analysis
-      if: steps.changes.outputs.force_run == 'true'
       run: |
         cd ${{ runner.temp }}/cbom-tool
         source venv/bin/activate
@@ -172,7 +136,6 @@ jobs:
           -vv
 
     - name: Quick Vulnerability Check
-      if: steps.changes.outputs.force_run == 'true'
       id: check-vulnerabilities
       run: |
         REPORT_PATH="${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt"
@@ -198,7 +161,6 @@ jobs:
 
     # Conditional summary generation
     - name: Create Analysis Summary
-      if: steps.changes.outputs.force_run == 'true'
       run: |
         REPORT_PATH="${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt"
         
@@ -273,9 +235,7 @@ jobs:
         echo "### Full Reports" >> $GITHUB_STEP_SUMMARY
         echo "Complete reports available in artifacts." >> $GITHUB_STEP_SUMMARY
 
-    # Skip detailed analysis for minor issues
     - name: Upload Analysis Results
-      if: steps.changes.outputs.force_run == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: cbom-analysis-results-${{ github.sha }}
@@ -285,16 +245,8 @@ jobs:
         retention-days: 7
         if-no-files-found: warn
 
-    # Skip creating separate summary job
-    - name: Skip Summary
-      if: steps.changes.outputs.force_run == 'false'
-      run: |
-        echo "## CBOM Analysis Skipped" >> $GITHUB_STEP_SUMMARY
-        echo "No source code changes detected. Analysis skipped to save time." >> $GITHUB_STEP_SUMMARY
-        echo "To force analysis, use workflow_dispatch or modify source files." >> $GITHUB_STEP_SUMMARY
-
     - name: Fail if High Severity Vulnerabilities Found
-      if: steps.changes.outputs.force_run == 'true' && env.has_vulnerabilities == 'true'
+      if: env.has_vulnerabilities == 'true'
       run: |
         echo "Security vulnerabilities were found in the analysis"
         exit 1
