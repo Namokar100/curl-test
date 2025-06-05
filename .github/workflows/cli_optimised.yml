@@ -8,134 +8,91 @@ on:
 
 env:
   CODEQL_VERSION: v2.21.3
-  CBOM_TOOL_VERSION: v1.0.0  # Add version for cache key
+  CBOM_TOOL_DIR: ${{ github.workspace }}/.cbom-tool
   ANALYSIS_OUTPUT_DIR: ${{ github.workspace }}/analysis-results
 
 jobs:
   cbom-analysis:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # Add timeout to prevent hanging
+    timeout-minutes: 30
 
     steps:
     - name: Checkout Current Repository
       uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # Needed for change detection
+        fetch-depth: 0
 
-    # Cache build dependencies
-    - name: Cache Build Dependencies
-      uses: actions/cache@v4
-      with:
-        path: |
-          /var/cache/apt
-          /var/lib/apt
-        key: ${{ runner.os }}-build-deps-${{ hashFiles('**/configure.ac', '**/Makefile.am', '**/CMakeLists.txt') }}
-        restore-keys: |
-          ${{ runner.os }}-build-deps-
-
-    # Optimized dependency installation
-    - name: Install Build Dependencies
-      run: |
-        # Use apt-fast for faster downloads (if available) or parallel downloads
-        sudo apt-get update -y
-        sudo apt-get install -y --no-install-recommends \
-          python3-dev python3-venv git curl \
-          build-essential autoconf automake libtool pkg-config cmake \
-          clang gcc g++ make \
-          libssl-dev zlib1g-dev libnghttp2-dev \
-          libpsl-dev libidn2-dev libssh2-1-dev \
-          libkrb5-dev librtmp-dev libldap2-dev \
-          libgnutls28-dev libcurl4-openssl-dev
-
-    # Cache CodeQL CLI
-    - name: Cache CodeQL CLI
-      id: cache-codeql
-      uses: actions/cache@v4
-      with:
-        path: ${{ runner.temp }}/codeql-cli
-        key: codeql-${{ env.CODEQL_VERSION }}-${{ runner.os }}
-
-    - name: Setup CodeQL CLI
-      if: steps.cache-codeql.outputs.cache-hit != 'true'
-      run: |
-        mkdir -p ${{ runner.temp }}/codeql-cli
-        wget -q https://github.com/github/codeql-action/releases/download/codeql-bundle-${{ env.CODEQL_VERSION }}/codeql-bundle-linux64.tar.gz -O codeql-bundle.tar.gz
-        tar -xzf codeql-bundle.tar.gz -C ${{ runner.temp }}/codeql-cli --strip-components=1
-
-    - name: Add CodeQL to PATH
-      run: |
-        echo "${{ runner.temp }}/codeql-cli/codeql" >> $GITHUB_PATH
-        echo "CODEQL_PATH=${{ runner.temp }}/codeql-cli/codeql" >> $GITHUB_ENV
-
-    # Cache Python dependencies
-    - name: Setup Python
+    - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-        cache: 'pip'
 
-    # Cache CBOM tool
-    - name: Cache CBOM Tool
-      id: cache-cbom
-      uses: actions/cache@v4
-      with:
-        path: ${{ runner.temp }}/cbom-tool
-        key: cbom-tool-${{ env.CBOM_TOOL_VERSION }}-${{ hashFiles('**/requirements.txt') }}
+    - name: Install Essential Build Tools
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y --no-install-recommends \
+          python3-dev python3-venv git curl build-essential
+
+    - name: Install Build Dependencies
+      run: |
+        sudo apt-get install -y build-essential autoconf automake libtool pkg-config cmake clang gcc g++ make
+        sudo apt-get install -y libssl-dev zlib1g-dev libnghttp2-dev
+        sudo apt-get install -y libpsl-dev libidn2-dev libssh2-1-dev
+        sudo apt-get install -y libkrb5-dev librtmp-dev libldap2-dev
+        sudo apt-get install -y libgnutls28-dev libcurl4-openssl-dev
+
+    - name: Setup CodeQL CLI
+      run: |
+        mkdir -p $HOME/codeql-cli
+        wget -q https://github.com/github/codeql-action/releases/download/codeql-bundle-${{ env.CODEQL_VERSION }}/codeql-bundle-linux64.tar.gz -O codeql-bundle.tar.gz
+        tar -xzf codeql-bundle.tar.gz -C $HOME/codeql-cli
+        CODEQL_PATH=$(find $HOME/codeql-cli -name codeql -type f | head -n 1)
+        CODEQL_DIR=$(dirname "$CODEQL_PATH")
+        echo "CODEQL_PATH=${CODEQL_PATH}" >> $GITHUB_ENV
+        echo "CODEQL_DIR=${CODEQL_DIR}" >> $GITHUB_ENV
+        echo "${CODEQL_DIR}" >> $GITHUB_PATH
+        "${CODEQL_PATH}" --version
 
     - name: Clone CBOM Analysis Tool
-      if: steps.cache-cbom.outputs.cache-hit != 'true'
       uses: actions/checkout@v4
       with:
         repository: Namokar100/tool
-        path: ${{ runner.temp }}/cbom-tool
+        path: ${{ env.CBOM_TOOL_DIR }}
         token: ${{ secrets.PAT_TOKEN }}
 
     - name: Install CBOM Tool Dependencies
-      if: steps.cache-cbom.outputs.cache-hit != 'true'
       run: |
-        cd ${{ runner.temp }}/cbom-tool
+        cd ${{ env.CBOM_TOOL_DIR }}
         python -m pip install --upgrade pip setuptools wheel
         python -m venv venv
         source venv/bin/activate
         pip install -r requirements.txt
         pip install -e .
 
-    # Cache build artifacts
-    - name: Cache Build Artifacts
-      uses: actions/cache@v4
-      with:
-        path: |
-          configure
-          config.status
-          Makefile
-          **/*.o
-          **/*.a
-        key: ${{ runner.os }}-build-${{ hashFiles('**/*.c', '**/*.h', 'configure.ac', 'Makefile.am') }}
-        restore-keys: |
-          ${{ runner.os }}-build-
-
     - name: Create Analysis Directory
       run: mkdir -p ${{ env.ANALYSIS_OUTPUT_DIR }}
 
-    # Optimized build with parallel compilation
     - name: Run CBOM Analysis
       run: |
-        cd ${{ runner.temp }}/cbom-tool
+        cd ${{ env.CBOM_TOOL_DIR }}
         source venv/bin/activate
         
-        # Use parallel compilation
-        NPROC=$(nproc)
+        # Get absolute path of repository to analyze
+        REPO_PATH="${{ github.workspace }}"
         
-        # Run the CLI analysis with optimized build
+        # Use the default rules file
+        RULES_PATH="${{ env.CBOM_TOOL_DIR }}/data/default_rules.yaml"
+        
+        # Run the CLI analysis
         python calyptra_ql/cli.py \
-          "${{ github.workspace }}" \
-          --build-command "autoreconf -fi && ./configure --with-openssl --disable-dependency-tracking && make -j${NPROC}" \
+          "${REPO_PATH}" \
+          --build-command "autoreconf -fi && ./configure --with-openssl && make -j$(nproc)" \
           -o "${{ env.ANALYSIS_OUTPUT_DIR }}/cbom.json" \
           -c "${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt" \
-          --rules "${{ runner.temp }}/cbom-tool/data/default_rules.yaml" \
+          --rules "${RULES_PATH}" \
           -vv
 
-    - name: Quick Vulnerability Check
+    - name: Check for Vulnerabilities
       id: check-vulnerabilities
       run: |
         REPORT_PATH="${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt"
@@ -146,97 +103,153 @@ jobs:
           exit 0
         fi
         
-        # Quick count using grep
-        VIOLATIONS_COUNT=$(grep -c "^- Rule ID:" "$REPORT_PATH" || echo "0")
+        # Extract each violation block
+        VIOLATION_BLOCKS=$(awk '/^- Rule ID:/ {found=1; print; next} found && NF==0 {found=0; print "---"} found && NF > 0 {print}' "$REPORT_PATH")
+        
+        # Count violations (based on "- Rule ID:" lines)
+        VIOLATIONS_COUNT=$(echo "$VIOLATION_BLOCKS" | grep -c '^- Rule ID:' || echo "0")
         
         if [ "$VIOLATIONS_COUNT" -gt 0 ]; then
           echo "has_vulnerabilities=true" >> $GITHUB_ENV
           echo "violations_count=$VIOLATIONS_COUNT" >> $GITHUB_ENV
           echo "::warning::Found $VIOLATIONS_COUNT security violations"
+          
+          echo "Violation Details:"
+          echo "$VIOLATION_BLOCKS" | awk '
+            /^- Rule ID:/ { rule=$0; next }
+            /^  Location:/ {
+              split($2, pathline, ":");
+              file=pathline[1]; line=pathline[2];
+              sub(/^- Rule ID: */, "", rule);
+              printf "- Rule: %s, File: %s, Line: %s\n", rule, file, line
+            }
+          '
         else
           echo "has_vulnerabilities=false" >> $GITHUB_ENV
           echo "violations_count=0" >> $GITHUB_ENV
           echo "No security vulnerabilities found"
         fi
 
-    # Conditional summary generation
     - name: Create Analysis Summary
       run: |
         REPORT_PATH="${{ env.ANALYSIS_OUTPUT_DIR }}/compliance_report.txt"
         
         echo "## CBOM Analysis Results" >> $GITHUB_STEP_SUMMARY
         echo "Analysis completed at: $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "### Repository Analyzed" >> $GITHUB_STEP_SUMMARY
         echo "Repository: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
         echo "Branch: ${GITHUB_REF#refs/heads/}" >> $GITHUB_STEP_SUMMARY
         echo "Commit: ${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
         if [ ! -f "$REPORT_PATH" ]; then
-          echo "### No violations found or analysis skipped" >> $GITHUB_STEP_SUMMARY
+          echo "### Compliance report not found." >> $GITHUB_STEP_SUMMARY
+          echo "No violations found." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Full Reports" >> $GITHUB_STEP_SUMMARY
+          echo "Detailed reports are available in the workflow artifacts:" >> $GITHUB_STEP_SUMMARY
+          echo "- CBOM Report (cbom.json)" >> $GITHUB_STEP_SUMMARY
+          echo "- Compliance Report (compliance_report.txt)" >> $GITHUB_STEP_SUMMARY
           exit 0
         fi
         
+        # Extract total violations count
         VIOLATIONS_COUNT="${{ env.violations_count }}"
+        if [ -z "$VIOLATIONS_COUNT" ]; then
+          VIOLATIONS_COUNT=0
+        fi
+        
         echo "### Security Violations Found" >> $GITHUB_STEP_SUMMARY
-        echo "**Total violations: $VIOLATIONS_COUNT**" >> $GITHUB_STEP_SUMMARY
+        echo "**Total violations found: $VIOLATIONS_COUNT**" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
         if [ "$VIOLATIONS_COUNT" -gt 0 ]; then
-          # Optimized parsing - process in chunks for large files
+          # Parse violations from the text file
           awk '
             BEGIN { 
+              violation_count = 0
+              in_violation = 0
               high_count = 0; medium_count = 0; low_count = 0
-              violation_num = 0
             }
             /^- Rule ID:/ {
-              violation_num++
-              rule_id = $0; gsub(/^- Rule ID:[[:space:]]*/, "", rule_id)
-              getline; description = $0; gsub(/^  Description:[[:space:]]*/, "", description)
-              getline; location = $0; gsub(/^  Location:[[:space:]]*/, "", location)
-              
-              split(location, loc, ":")
-              file = loc[1]; line = loc[2]
-              
-              # Quick severity mapping
-              severity = "Medium"
-              if (index(description, "DES") > 0 || index(description, "RC4") > 0) {
-                severity = "High"; high_count++
-              } else if (index(description, "MD5") > 0 || index(description, "SHA1") > 0) {
-                severity = "Medium"; medium_count++
-              } else {
-                severity = "Low"; low_count++
+              in_violation = 1
+              rule_id = $0
+              gsub(/^- Rule ID:[[:space:]]*/, "", rule_id)
+            }
+            in_violation && /^  Description:/ {
+              description = $0
+              gsub(/^  Description:[[:space:]]*/, "", description)
+            }
+            in_violation && /^  Location:/ {
+              location = $0
+              gsub(/^  Location:[[:space:]]*/, "", location)
+              split(location, loc_parts, ":")
+              file = loc_parts[1]
+              line = loc_parts[2]
+            }
+            in_violation && /^  Finding:/ {
+              finding = $0
+              gsub(/^  Finding:[[:space:]]*/, "", finding)
+            }
+            in_violation && /^$/ {
+              if (rule_id && description && file && line) {
+                violation_count++
+                
+                # Determine severity based on rule ID or description
+                severity = "Medium"
+                if (index(description, "DES") > 0) { severity = "High"; high_count++ }
+                else if (index(description, "MD5") > 0) { severity = "Medium"; medium_count++ }
+                else if (index(description, "SHA1") > 0) { severity = "Medium"; medium_count++ }
+                else if (index(description, "RC4") > 0) { severity = "High"; high_count++ }
+                else { severity = "Low"; low_count++ }
+                
+                # Limit output for performance - show only first 10 violations in detail
+                if (violation_count <= 10) {
+                  print "#### Violation " violation_count " in `" file "` at line " line
+                  print "**Rule**: " rule_id
+                  print "**Severity**: " severity
+                  print "**Description**: " description
+                  print ""
+                }
               }
-              
-              # Limit output for performance - show only first 10 violations in detail
-              if (violation_num <= 10) {
-                print "#### Violation " violation_num " in `" file "` at line " line
-                print "**Rule**: " rule_id
-                print "**Severity**: " severity  
-                print "**Description**: " description
-                print ""
-              }
+              in_violation = 0
+              rule_id = ""
+              description = ""
+              location = ""
+              file = ""
+              line = ""
+              finding = ""
             }
             END {
-              if (violation_num > 10) {
-                print "... and " (violation_num - 10) " more violations"
+              if (violation_count > 10) {
+                print "... and " (violation_count - 10) " more violations"
                 print ""
               }
               print "### Violation Statistics"
-              print "**Total violations**: " violation_num
+              print "**Total violations**: " violation_count
+              print ""
               print "**By severity:**"
               if (high_count > 0) print "- High: " high_count
-              if (medium_count > 0) print "- Medium: " medium_count  
+              if (medium_count > 0) print "- Medium: " medium_count
               if (low_count > 0) print "- Low: " low_count
+              print ""
             }
           ' "$REPORT_PATH" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "No violations found." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
         fi
         
-        echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Full Reports" >> $GITHUB_STEP_SUMMARY
-        echo "Complete reports available in artifacts." >> $GITHUB_STEP_SUMMARY
+        echo "Detailed reports are available in the workflow artifacts:" >> $GITHUB_STEP_SUMMARY
+        echo "- CBOM Report (cbom.json)" >> $GITHUB_STEP_SUMMARY
+        echo "- Compliance Report (compliance_report.txt)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Job summary generated at run-time**" >> $GITHUB_STEP_SUMMARY
 
     - name: Upload Analysis Results
       uses: actions/upload-artifact@v4
+      if: always()
       with:
         name: cbom-analysis-results-${{ github.sha }}
         path: |
@@ -245,7 +258,7 @@ jobs:
         retention-days: 7
         if-no-files-found: warn
 
-    - name: Fail if High Severity Vulnerabilities Found
+    - name: Fail if Vulnerabilities Found
       if: env.has_vulnerabilities == 'true'
       run: |
         echo "Security vulnerabilities were found in the analysis"
