@@ -1,4 +1,4 @@
-name: BCAE action
+name: CBAE action
 
 on: [push]
 
@@ -9,6 +9,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run CBOM Analysis
-        uses: Namokar100/cbae-action@v1.0.7
+        uses: Namokar100/cbae-action@v1.0.8
         with:
           token: ${{ secrets.PAT_TOKEN }}
