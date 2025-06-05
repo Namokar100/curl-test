@@ -160,7 +160,6 @@ jobs:
     
         echo "### Security Violations Found" >> $GITHUB_STEP_SUMMARY
     
-        # Extract violation blocks
         awk '
           /^- Rule ID:/ {in_rule=1; rule=$0; next}
           in_rule && /^  Location:/ {
@@ -174,14 +173,15 @@ jobs:
             printf("- **Rule**: %s\n", rule) >> "summary.md";
             printf("- **File**: %s\n", file) >> "summary.md";
             printf("- **Line**: %s\n", line) >> "summary.md";
-            
+
+            # Generate code snippet using external awk call
             if (system("[ -f \"" file "\" ]") == 0) {
               start = (line - 3 > 0) ? line - 3 : 1;
               end = line + 3;
-              printf("**Affected Code:**\n\`\`\`c\n") >> "summary.md";
-              cmd = sprintf("awk \'NR >= %d && NR <= %d { if (NR == %d) { printf(\"→ %%d: %%s\\n\", NR, $0) } else { printf(\"  %%d: %%s\\n\", NR, $0) }}\' %s", start, end, line, file);
-              system(cmd " >> summary.md");
-              printf("\`\`\`\n\n") >> "summary.md";
+              printf("**Affected Code:**\n```c\n") >> "summary.md";
+              cmd = "awk -v s=" start " -v e=" end " -v h=" line " \'NR>=s && NR<=e { if (NR==h) printf(\"→ %%d: %%s\\n\", NR, $$0); else printf(\"  %%d: %%s\\n\", NR, $$0); }\' \"" file "\" >> summary.md";
+              system(cmd);
+              printf("```\n\n") >> "summary.md";
             } else {
               printf("File not found in workspace.\n\n") >> "summary.md";
             }
@@ -201,7 +201,6 @@ jobs:
         echo "Detailed reports are available in the workflow artifacts:" >> $GITHUB_STEP_SUMMARY
         echo "- CBOM Report (cbom.json)" >> $GITHUB_STEP_SUMMARY
         echo "- Compliance Report (compliance_report.txt)" >> $GITHUB_STEP_SUMMARY
-
 
     - name: Fail if Vulnerabilities Found
       if: env.has_vulnerabilities == 'true'
