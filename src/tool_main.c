@@ -132,6 +132,7 @@ static void memory_tracking_init(void)
   }
   /* if CURL_MEMLIMIT is set, this enables fail-on-alloc-number-N feature */
   env = curl_getenv("CURL_MEMLIMIT");
+  printf("Inside main");
   if(env) {
     curl_off_t num;
     const char *p = env;
